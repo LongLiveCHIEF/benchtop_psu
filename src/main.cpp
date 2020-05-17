@@ -1,177 +1,293 @@
 /*
-  This sketch reads the user setup information from the processor via the Serial Port
-
-  It is a support and diagnostic sketch for the TFT_eSPI library:
-  https://github.com/Bodmer/TFT_eSPI
-
-  The output is essentially a copy of the User_Setep configuration so can be used to
-  verify the correct settings are being picked up by the compiler.
-
-  If support is needed the output can be cut and pasted into an Arduino Forum post and
-  already includes the formatting [code]...[/code] markups.
-
-  Written by Bodmer 9/4/18
+  Example animated analogue meters using a ILI9341 TFT LCD screen
+  Needs Font 2 (also Font 4 if using large scale label)
+  Make sure all the display driver and pin comnenctions are correct by
+  editting the User_Setup.h file in the TFT_eSPI library folder.
+  #########################################################################
+  ###### DON'T FORGET TO UPDATE THE User_Setup.h FILE IN THE LIBRARY ######
+  #########################################################################
 */
-//>>>>> Note: STM32 pin references above D15 may not reflect board markings <<<<<
 
+#include <TFT_eSPI.h> // Hardware-specific library
 #include <SPI.h>
-#include <TFT_eSPI.h>      // Graphics library
 
-TFT_eSPI tft = TFT_eSPI(); // Invoke library
+TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
 
-#ifdef ESP8266
-  ADC_MODE(ADC_VCC); // Read the supply voltage
-#endif
+#define TFT_GREY 0x5AEB
 
-setup_t user; // The library defines the type "setup_t" as a struct
-              // Calling tft.getSetup(user) populates it with the settings
-//------------------------------------------------------------------------------------------
+#define LOOP_PERIOD 35 // Display updates every 35 ms
 
-void setup() {
-  // Use serial port
-  Serial.begin(115200);
+float ltx = 0;    // Saved x coord of bottom of needle
+uint16_t osx = 120, osy = 120; // Saved x & y coords
+uint32_t updateTime = 0;       // time for next update
 
-  // Initialise the TFT screen
-  tft.init();
-}
+int old_analog =  -999; // Value last displayed
+int old_digital = -999; // Value last displayed
 
-//------------------------------------------------------------------------------------------
+int value[6] = {0, 0, 0, 0, 0, 0};
+int old_value[6] = { -1, -1, -1, -1, -1, -1};
+int d = 0;
 
-void loop(void) {
-
-tft.getSetup(user); //
-
-Serial.print("\n[code]\n");
-
-Serial.print ("TFT_eSPI ver = "); Serial.println(user.version);
-printProcessorName();
-#if defined (ESP32) || defined (ESP8266)
-  if (user.esp < 0x32F000 || user.esp > 0x32FFFF) { Serial.print("Frequency    = "); Serial.print(ESP.getCpuFreqMHz());Serial.println("MHz"); }
-#endif
-#ifdef ESP8266
-  Serial.print("Voltage      = "); Serial.print(ESP.getVcc() / 918.0); Serial.println("V"); // 918 empirically determined
-#endif
-Serial.print("Transactions = "); Serial.println((user.trans  ==  1) ? "Yes" : "No");
-Serial.print("Interface    = "); Serial.println((user.serial ==  1) ? "SPI" : "Parallel");
-#ifdef ESP8266
-if (user.serial ==  1){ Serial.print("SPI overlap  = "); Serial.println((user.overlap == 1) ? "Yes\n" : "No\n"); }
-#endif
-if (user.tft_driver != 0xE9D) // For ePaper displays the size is defined in the sketch
+void plotNeedle(int value, byte ms_delay)
 {
-  Serial.print("Display driver = "); Serial.println(user.tft_driver, HEX); // Hexadecimal code
-  Serial.print("Display width  = "); Serial.println(user.tft_width);  // Rotation 0 width and height
-  Serial.print("Display height = "); Serial.println(user.tft_height);
-}
-else if (user.tft_driver == 0xE9D) Serial.println("Display driver = ePaper\n");
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  char buf[8]; dtostrf(value, 4, 0, buf);
+  tft.drawRightString(buf, 40, 119 - 20, 2);
 
-if (user.r0_x_offset  != 0)  { Serial.print("R0 x offset = "); Serial.println(user.r0_x_offset); } // Offsets, not all used yet
-if (user.r0_y_offset  != 0)  { Serial.print("R0 y offset = "); Serial.println(user.r0_y_offset); }
-if (user.r1_x_offset  != 0)  { Serial.print("R1 x offset = "); Serial.println(user.r1_x_offset); }
-if (user.r1_y_offset  != 0)  { Serial.print("R1 y offset = "); Serial.println(user.r1_y_offset); }
-if (user.r2_x_offset  != 0)  { Serial.print("R2 x offset = "); Serial.println(user.r2_x_offset); }
-if (user.r2_y_offset  != 0)  { Serial.print("R2 y offset = "); Serial.println(user.r2_y_offset); }
-if (user.r3_x_offset  != 0)  { Serial.print("R3 x offset = "); Serial.println(user.r3_x_offset); }
-if (user.r3_y_offset  != 0)  { Serial.print("R3 y offset = "); Serial.println(user.r3_y_offset); }
+  if (value < -10) value = -10; // Limit value to emulate needle end stops
+  if (value > 110) value = 110;
 
-#ifdef ESP32
-  if (user.pin_tft_mosi != -1) { Serial.print("MOSI    = "); Serial.print("GPIO "); Serial.println(user.pin_tft_mosi); }
-  if (user.pin_tft_miso != -1) { Serial.print("MISO    = "); Serial.print("GPIO "); Serial.println(user.pin_tft_miso); }
-  if (user.pin_tft_clk  != -1) { Serial.print("SCK     = "); Serial.print("GPIO "); Serial.println(user.pin_tft_clk); }
-#else
-  if (user.pin_tft_mosi != -1) { Serial.print("MOSI    = "); Serial.print("GPIO "); Serial.print(getPinName(user.pin_tft_mosi)); Serial.println(user.pin_tft_mosi); }
-  if (user.pin_tft_miso != -1) { Serial.print("MISO    = "); Serial.print("GPIO "); Serial.print(getPinName(user.pin_tft_miso)); Serial.println(user.pin_tft_miso); }
-  if (user.pin_tft_clk  != -1) { Serial.print("SCK     = "); Serial.print("GPIO "); Serial.print(getPinName(user.pin_tft_clk)); Serial.println(user.pin_tft_clk); }
-#endif
+  // Move the needle util new value reached
+  while (!(value == old_analog)) {
+    if (old_analog < value) old_analog++;
+    else old_analog--;
 
-#ifdef ESP8266
-if (user.overlap == true)
-{
-  Serial.println("Overlap selected, following pins MUST be used:");
+    if (ms_delay == 0) old_analog = value; // Update immediately id delay is 0
 
-                             Serial.println("MOSI     = SD1 (GPIO 8)");
-                             Serial.println("MISO     = SD0 (GPIO 7)");
-                             Serial.println("SCK      = CLK (GPIO 6)");
-                             Serial.println("TFT_CS   = D3  (GPIO 0)\n");
+    float sdeg = map(old_analog, -10, 110, -150, -30); // Map value to angle
+    // Calcualte tip of needle coords
+    float sx = cos(sdeg * 0.0174532925);
+    float sy = sin(sdeg * 0.0174532925);
 
-  Serial.println("TFT_DC and TFT_RST pins can be user defined");
-}
-#endif
-String pinNameRef = "GPIO ";
-if (user.esp == 0x32F) {
-  Serial.println("\n>>>>> Note: STM32 pin references above D15 may not reflect board markings <<<<<");
-  pinNameRef = "D";
-}
-if (user.pin_tft_cs != -1) { Serial.print("TFT_CS   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_cs)); }
-if (user.pin_tft_dc != -1) { Serial.print("TFT_DC   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_dc)); }
-if (user.pin_tft_rst!= -1) { Serial.print("TFT_RST  = " + pinNameRef); Serial.println(getPinName(user.pin_tft_rst)); }
+    // Calculate x delta of needle start (does not start at pivot point)
+    float tx = tan((sdeg + 90) * 0.0174532925);
 
-if (user.pin_tch_cs != -1) { Serial.print("TOUCH_CS = " + pinNameRef); Serial.println(getPinName(user.pin_tch_cs)); }
+    // Erase old needle image
+    tft.drawLine(120 + 20 * ltx - 1, 140 - 20, osx - 1, osy, TFT_WHITE);
+    tft.drawLine(120 + 20 * ltx, 140 - 20, osx, osy, TFT_WHITE);
+    tft.drawLine(120 + 20 * ltx + 1, 140 - 20, osx + 1, osy, TFT_WHITE);
 
-if (user.pin_tft_wr != -1) { Serial.print("TFT_WR   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_wr)); }
-if (user.pin_tft_rd != -1) { Serial.print("TFT_RD   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_rd)); }
+    // Re-plot text under needle
+    tft.setTextColor(TFT_BLACK);
+    tft.drawCentreString("%RH", 120, 70, 4); // // Comment out to avoid font 4
 
-if (user.pin_tft_d0 != -1) { Serial.print("\nTFT_D0   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d0)); }
-if (user.pin_tft_d1 != -1) { Serial.print("TFT_D1   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d1)); }
-if (user.pin_tft_d2 != -1) { Serial.print("TFT_D2   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d2)); }
-if (user.pin_tft_d3 != -1) { Serial.print("TFT_D3   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d3)); }
-if (user.pin_tft_d4 != -1) { Serial.print("TFT_D4   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d4)); }
-if (user.pin_tft_d5 != -1) { Serial.print("TFT_D5   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d5)); }
-if (user.pin_tft_d6 != -1) { Serial.print("TFT_D6   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d6)); }
-if (user.pin_tft_d7 != -1) { Serial.print("TFT_D7   = " + pinNameRef); Serial.println(getPinName(user.pin_tft_d7)); }
+    // Store new needle end coords for next erase
+    ltx = tx;
+    osx = sx * 98 + 120;
+    osy = sy * 98 + 140;
 
-uint16_t fonts = tft.fontsLoaded();
-if (fonts & (1 << 1))        Serial.print("Font GLCD   loaded\n");
-if (fonts & (1 << 2))        Serial.print("Font 2      loaded\n");
-if (fonts & (1 << 4))        Serial.print("Font 4      loaded\n");
-if (fonts & (1 << 6))        Serial.print("Font 6      loaded\n");
-if (fonts & (1 << 7))        Serial.print("Font 7      loaded\n");
-if (fonts & (1 << 9))        Serial.print("Font 8N     loaded\n");
-else
-if (fonts & (1 << 8))        Serial.print("Font 8      loaded\n");
-if (fonts & (1 << 15))       Serial.print("Smooth font enabled\n");
-Serial.print("\n");
+    // Draw the needle in the new postion, magenta makes needle a bit bolder
+    // draws 3 lines to thicken needle
+    tft.drawLine(120 + 20 * ltx - 1, 140 - 20, osx - 1, osy, TFT_RED);
+    tft.drawLine(120 + 20 * ltx, 140 - 20, osx, osy, TFT_MAGENTA);
+    tft.drawLine(120 + 20 * ltx + 1, 140 - 20, osx + 1, osy, TFT_RED);
 
-if (user.serial==1)        { Serial.print("Display SPI frequency = "); Serial.println(user.tft_spi_freq/10.0); }
-if (user.pin_tch_cs != -1) { Serial.print("Touch SPI frequency   = "); Serial.println(user.tch_spi_freq/10.0); }
+    // Slow needle down slightly as it approaches new postion
+    if (abs(old_analog - value) < 10) ms_delay += ms_delay / 5;
 
-Serial.println("[/code]");
-
-while(1) yield();
-
-}
-
-void printProcessorName(void)
-{
-  Serial.print("Processor    = ");
-  if ( user.esp == 0x8266) Serial.println("ESP8266");
-  if ( user.esp == 0x32)   Serial.println("ESP32");
-  if ( user.esp == 0x32F)  Serial.println("STM32");
-  if ( user.esp == 0x0000) Serial.println("Generic");
-}
-
-// Get pin name
-int8_t getPinName(int8_t pin)
-{
-  // For ESP32 pin labels on boards use the GPIO number
-  if (user.esp == 0x32) return pin;
-
-  if (user.esp == 0x8266) {
-    // For ESP8266 the pin labels are not the same as the GPIO number
-    // These are for the NodeMCU pin definitions:
-    //        GPIO       Dxx
-    if (pin == 16) return 0;
-    if (pin ==  5) return 1;
-    if (pin ==  4) return 2;
-    if (pin ==  0) return 3;
-    if (pin ==  2) return 4;
-    if (pin == 14) return 5;
-    if (pin == 12) return 6;
-    if (pin == 13) return 7;
-    if (pin == 15) return 8;
-    if (pin ==  3) return 9;
-    if (pin ==  1) return 10;
-    if (pin ==  9) return 11;
-    if (pin == 10) return 12;
+    // Wait before next update
+    delay(ms_delay);
   }
-lationn
+}
+
+// #########################################################################
+//  Draw the analogue meter on the screen
+// #########################################################################
+void analogMeter()
+{
+  // Meter outline
+  tft.fillRect(0, 0, 239, 126, TFT_GREY);
+  tft.fillRect(5, 3, 230, 119, TFT_WHITE);
+
+  tft.setTextColor(TFT_BLACK);  // Text colour
+
+  // Draw ticks every 5 degrees from -50 to +50 degrees (100 deg. FSD swing)
+  for (int i = -50; i < 51; i += 5) {
+    // Long scale tick length
+    int tl = 15;
+
+    // Coodinates of tick to draw
+    float sx = cos((i - 90) * 0.0174532925);
+    float sy = sin((i - 90) * 0.0174532925);
+    uint16_t x0 = sx * (100 + tl) + 120;
+    uint16_t y0 = sy * (100 + tl) + 140;
+    uint16_t x1 = sx * 100 + 120;
+    uint16_t y1 = sy * 100 + 140;
+
+    // Coordinates of next tick for zone fill
+    float sx2 = cos((i + 5 - 90) * 0.0174532925);
+    float sy2 = sin((i + 5 - 90) * 0.0174532925);
+    int x2 = sx2 * (100 + tl) + 120;
+    int y2 = sy2 * (100 + tl) + 140;
+    int x3 = sx2 * 100 + 120;
+    int y3 = sy2 * 100 + 140;
+
+    // Yellow zone limits
+    //if (i >= -50 && i < 0) {
+    //  tft.fillTriangle(x0, y0, x1, y1, x2, y2, TFT_YELLOW);
+    //  tft.fillTriangle(x1, y1, x2, y2, x3, y3, TFT_YELLOW);
+    //}
+
+    // Green zone limits
+    if (i >= 0 && i < 25) {
+      tft.fillTriangle(x0, y0, x1, y1, x2, y2, TFT_GREEN);
+      tft.fillTriangle(x1, y1, x2, y2, x3, y3, TFT_GREEN);
+    }
+
+    // Orange zone limits
+    if (i >= 25 && i < 50) {
+      tft.fillTriangle(x0, y0, x1, y1, x2, y2, TFT_ORANGE);
+      tft.fillTriangle(x1, y1, x2, y2, x3, y3, TFT_ORANGE);
+    }
+
+    // Short scale tick length
+    if (i % 25 != 0) tl = 8;
+
+    // Recalculate coords incase tick lenght changed
+    x0 = sx * (100 + tl) + 120;
+    y0 = sy * (100 + tl) + 140;
+    x1 = sx * 100 + 120;
+    y1 = sy * 100 + 140;
+
+    // Draw tick
+    tft.drawLine(x0, y0, x1, y1, TFT_BLACK);
+
+    // Check if labels should be drawn, with position tweaks
+    if (i % 25 == 0) {
+      // Calculate label positions
+      x0 = sx * (100 + tl + 10) + 120;
+      y0 = sy * (100 + tl + 10) + 140;
+      switch (i / 25) {
+        case -2: tft.drawCentreString("0", x0, y0 - 12, 2); break;
+        case -1: tft.drawCentreString("25", x0, y0 - 9, 2); break;
+        case 0: tft.drawCentreString("50", x0, y0 - 6, 2); break;
+        case 1: tft.drawCentreString("75", x0, y0 - 9, 2); break;
+        case 2: tft.drawCentreString("100", x0, y0 - 12, 2); break;
+      }
+    }
+
+    // Now draw the arc of the scale
+    sx = cos((i + 5 - 90) * 0.0174532925);
+    sy = sin((i + 5 - 90) * 0.0174532925);
+    x0 = sx * 100 + 120;
+    y0 = sy * 100 + 140;
+    // Draw scale arc, don't draw the last part
+    if (i < 50) tft.drawLine(x0, y0, x1, y1, TFT_BLACK);
+  }
+
+  tft.drawString("%RH", 5 + 230 - 40, 119 - 20, 2); // Units at bottom right
+  tft.drawCentreString("%RH", 120, 70, 4); // Comment out to avoid font 4
+  tft.drawRect(5, 3, 230, 119, TFT_BLACK); // Draw bezel line
+
+  plotNeedle(0, 0); // Put meter needle at 0
+}
+
+// #########################################################################
+// Update needle position
+// This function is blocking while needle moves, time depends on ms_delay
+// 10ms minimises needle flicker if text is drawn within needle sweep area
+// Smaller values OK if text not in sweep area, zero for instant movement but
+// does not look realistic... (note: 100 increments for full scale deflection)
+// #########################################################################
+
+
+// #########################################################################
+//  Draw a linear meter on the screen
+// #########################################################################
+void plotLinear(char *label, int x, int y)
+{
+  int w = 36;
+  tft.drawRect(x, y, w, 155, TFT_GREY);
+  tft.fillRect(x + 2, y + 19, w - 3, 155 - 38, TFT_WHITE);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.drawCentreString(label, x + w / 2, y + 2, 2);
+
+  for (int i = 0; i < 110; i += 10)
+  {
+    tft.drawFastHLine(x + 20, y + 27 + i, 6, TFT_BLACK);
+  }
+
+  for (int i = 0; i < 110; i += 50)
+  {
+    tft.drawFastHLine(x + 20, y + 27 + i, 9, TFT_BLACK);
+  }
+
+  tft.fillTriangle(x + 3, y + 127, x + 3 + 16, y + 127, x + 3, y + 127 - 5, TFT_RED);
+  tft.fillTriangle(x + 3, y + 127, x + 3 + 16, y + 127, x + 3, y + 127 + 5, TFT_RED);
+
+  tft.drawCentreString("---", x + w / 2, y + 155 - 18, 2);
+}
+
+// #########################################################################
+//  Adjust 6 linear meter pointer positions
+// #########################################################################
+void plotPointer(void)
+{
+  int dy = 187;
+  byte pw = 16;
+
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+
+  // Move the 6 pointers one pixel towards new value
+  for (int i = 0; i < 6; i++)
+  {
+    char buf[8]; dtostrf(value[i], 4, 0, buf);
+    tft.drawRightString(buf, i * 40 + 36 - 5, 187 - 27 + 155 - 18, 2);
+
+    int dx = 3 + 40 * i;
+    if (value[i] < 0) value[i] = 0; // Limit value to emulate needle end stops
+    if (value[i] > 100) value[i] = 100;
+
+    while (!(value[i] == old_value[i])) {
+      dy = 187 + 100 - old_value[i];
+      if (old_value[i] > value[i])
+      {
+        tft.drawLine(dx, dy - 5, dx + pw, dy, TFT_WHITE);
+        old_value[i]--;
+        tft.drawLine(dx, dy + 6, dx + pw, dy + 1, TFT_RED);
+      }
+      else
+      {
+        tft.drawLine(dx, dy + 5, dx + pw, dy, TFT_WHITE);
+        old_value[i]++;
+        tft.drawLine(dx, dy - 6, dx + pw, dy - 1, TFT_RED);
+      }
+    }
+  }
+}
+
+void setup(void) {
+  tft.init();
+  tft.setRotation(0);
+  Serial.begin(57600); // For debug
+  tft.fillScreen(TFT_BLACK);
+
+  analogMeter(); // Draw analogue meter
+
+  // Draw 6 linear meters
+  byte d = 40;
+  plotLinear("A0", 0, 160);
+  plotLinear("A1", 1 * d, 160);
+  plotLinear("A2", 2 * d, 160);
+  plotLinear("A3", 3 * d, 160);
+  plotLinear("A4", 4 * d, 160);
+  plotLinear("A5", 5 * d, 160);
+
+  updateTime = millis(); // Next update time
+}
+
+void loop() {
+  if (updateTime <= millis()) {
+    updateTime = millis() + LOOP_PERIOD;
+
+    d += 4; if (d >= 360) d = 0;
+
+    //value[0] = map(analogRead(A0), 0, 1023, 0, 100); // Test with value form Analogue 0
+
+    // Create a Sine wave for testing
+    value[0] = 50 + 50 * sin((d + 0) * 0.0174532925);
+    value[1] = 50 + 50 * sin((d + 60) * 0.0174532925);
+    value[2] = 50 + 50 * sin((d + 120) * 0.0174532925);
+    value[3] = 50 + 50 * sin((d + 180) * 0.0174532925);
+    value[4] = 50 + 50 * sin((d + 240) * 0.0174532925);
+    value[5] = 50 + 50 * sin((d + 300) * 0.0174532925);
+
+    //unsigned long t = millis();
+
+    plotPointer();
+
+    plotNeedle(value[0], 0);
+
+    //Serial.println(millis()-t); // Print time taken for meter update
+  }
 }
